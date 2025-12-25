@@ -716,6 +716,7 @@ break
 except Exception as e:
     logger.error(f"Error in /api/channels toggle: {e}")
     return jsonify({'success': False, 'error': str(e)}), 500
-if name == 'main':
-port = int(os.getenv('PORT', 5000))
-app.run(host='0.0.0.0', port=port, debug=False)
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 5000))
+    # Use threaded=True for better handling
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
