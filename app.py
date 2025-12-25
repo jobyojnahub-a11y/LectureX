@@ -2,11 +2,16 @@ import os
 import json
 import asyncio
 import threading
+import logging
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, session
 from flask_cors import CORS
 from dotenv import load_dotenv
 import hashlib
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -14,18 +19,30 @@ app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'change-this-secret-key-in-production')
 CORS(app)
 
+# Data file path - will persist on Render's disk
+DATA_DIR = '/opt/render/project/src/data'
+DATA_FILE = 'pw_uploader_data.json'
+
+# Create data directory if not exists
+os.makedirs(DATA_DIR, exist_ok=True)
+DATA_PATH = os.path.join(DATA_DIR, DATA_FILE)
+
 # Global bot instance
 bot_instance = None
 bot_thread = None
 
-# Simple file-based storage (use database in production)
-DATA_FILE = 'data.json'
-
 def load_data():
     """Load data from JSON file"""
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
+    try:
+        if os.path.exists(DATA_PATH):
+            with open(DATA_PATH, 'r') as f:
+                data = json.load(f)
+                logger.info(f"Data loaded from {DATA_PATH}")
+                return data
+    except Exception as e:
+        logger.error(f"Error loading data: {e}")
+    
+    # Return default data
     return {
         'auth': None,
         'config': {
@@ -39,14 +56,20 @@ def load_data():
 
 def save_data(data):
     """Save data to JSON file"""
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(DATA_PATH, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"Data saved to {DATA_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving data: {e}")
+        return False
 
 def hash_password(password):
     """Simple password hashing"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-# HTML Template for Admin Panel
+# HTML Template (same as before, no changes needed)
 ADMIN_PANEL_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -69,40 +92,46 @@ ADMIN_PANEL_HTML = """
         let channelsData = [];
         let sessionActive = false;
 
-        // Load initial data
         async function loadData() {
-            const res = await fetch('/api/data');
-            const data = await res.json();
-            authData = data.auth;
-            configData = data.config;
-            channelsData = data.channels;
-            sessionActive = data.session_active;
-            render();
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+                authData = data.auth;
+                configData = data.config;
+                channelsData = data.channels;
+                sessionActive = data.session_active;
+                render();
+            } catch (err) {
+                console.error('Error loading data:', err);
+                alert('Failed to load data. Please refresh the page.');
+            }
         }
 
-        // Check authentication
         function isAuthenticated() {
             return sessionStorage.getItem('authenticated') === 'true';
         }
 
-        // Login
         async function login() {
             const password = document.getElementById('password').value;
-            const res = await fetch('/api/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password })
-            });
-            const data = await res.json();
-            if (data.success) {
-                sessionStorage.setItem('authenticated', 'true');
-                render();
-            } else {
-                alert(data.error);
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    sessionStorage.setItem('authenticated', 'true');
+                    render();
+                } else {
+                    alert(data.error || 'Login failed');
+                }
+            } catch (err) {
+                console.error('Login error:', err);
+                alert('Login failed. Please try again.');
             }
         }
 
-        // Setup password
         async function setupPassword() {
             const password = document.getElementById('setupPassword').value;
             const confirm = document.getElementById('confirmPassword').value;
@@ -116,25 +145,30 @@ ADMIN_PANEL_HTML = """
                 return;
             }
 
-            const res = await fetch('/api/setup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password })
-            });
-            const data = await res.json();
-            if (data.success) {
-                alert('Password setup successful!');
-                loadData();
+            try {
+                const res = await fetch('/api/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Password setup successful!');
+                    loadData();
+                } else {
+                    alert(data.error || 'Setup failed');
+                }
+            } catch (err) {
+                console.error('Setup error:', err);
+                alert('Setup failed. Please try again.');
             }
         }
 
-        // Logout
         function logout() {
             sessionStorage.removeItem('authenticated');
             render();
         }
 
-        // Save config
         async function saveConfig() {
             const config = {
                 telegramSession: document.getElementById('telegramSession').value,
@@ -142,32 +176,52 @@ ADMIN_PANEL_HTML = """
                 styStrkToken: document.getElementById('styStrkToken').value
             };
 
-            const res = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            const data = await res.json();
-            if (data.success) {
-                alert('Configuration saved!');
-                configData = config;
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Configuration saved!');
+                    configData = config;
+                } else {
+                    alert(data.error || 'Save failed');
+                }
+            } catch (err) {
+                console.error('Save config error:', err);
+                alert('Failed to save configuration.');
             }
         }
 
-        // Toggle session
         async function toggleSession() {
             const action = sessionActive ? 'deactivate' : 'activate';
-            const res = await fetch('/api/session/' + action, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                sessionActive = !sessionActive;
-                render();
-            } else {
-                alert(data.error);
+            
+            if (!sessionActive && !configData.telegramSession) {
+                alert('Please configure Telegram session string first!');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/session/' + action, { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                if (data.success) {
+                    sessionActive = !sessionActive;
+                    alert(data.message || 'Session toggled successfully');
+                    render();
+                } else {
+                    alert(data.error || 'Failed to toggle session');
+                }
+            } catch (err) {
+                console.error('Toggle session error:', err);
+                alert('Error: ' + (err.message || 'Failed to toggle session'));
             }
         }
 
-        // Add channel
         async function addChannel() {
             const channel = {
                 name: document.getElementById('channelName').value,
@@ -182,48 +236,65 @@ ADMIN_PANEL_HTML = """
                 return;
             }
 
-            const res = await fetch('/api/channels', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(channel)
-            });
-            const data = await res.json();
-            if (data.success) {
-                channelsData = data.channels;
-                document.getElementById('channelName').value = '';
-                document.getElementById('channelId').value = '';
-                document.getElementById('batchId').value = '';
-                render();
+            try {
+                const res = await fetch('/api/channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(channel)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    channelsData = data.channels;
+                    document.getElementById('channelName').value = '';
+                    document.getElementById('channelId').value = '';
+                    document.getElementById('batchId').value = '';
+                    render();
+                } else {
+                    alert(data.error || 'Failed to add channel');
+                }
+            } catch (err) {
+                console.error('Add channel error:', err);
+                alert('Failed to add channel.');
             }
         }
 
-        // Delete channel
         async function deleteChannel(id) {
             if (!confirm('Delete this channel?')) return;
             
-            const res = await fetch('/api/channels/' + id, { method: 'DELETE' });
-            const data = await res.json();
-            if (data.success) {
-                channelsData = data.channels;
-                render();
+            try {
+                const res = await fetch('/api/channels/' + id, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.success) {
+                    channelsData = data.channels;
+                    render();
+                } else {
+                    alert(data.error || 'Failed to delete channel');
+                }
+            } catch (err) {
+                console.error('Delete channel error:', err);
+                alert('Failed to delete channel.');
             }
         }
 
-        // Toggle channel status
         async function toggleChannel(id) {
-            const res = await fetch('/api/channels/' + id + '/toggle', { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                channelsData = data.channels;
-                render();
+            try {
+                const res = await fetch('/api/channels/' + id + '/toggle', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    channelsData = data.channels;
+                    render();
+                } else {
+                    alert(data.error || 'Failed to toggle channel');
+                }
+            } catch (err) {
+                console.error('Toggle channel error:', err);
+                alert('Failed to toggle channel.');
             }
         }
 
-        // Render UI
         function render() {
             const app = document.getElementById('app');
             
-            // Not authenticated
             if (!authData) {
                 app.innerHTML = renderSetup();
                 return;
@@ -299,7 +370,6 @@ ADMIN_PANEL_HTML = """
             
             return `
                 <div class="min-h-screen bg-gray-50">
-                    <!-- Header -->
                     <div class="bg-white shadow">
                         <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
                             <h1 class="text-2xl font-bold text-gray-800">PW Auto Uploader - Admin Panel</h1>
@@ -309,7 +379,6 @@ ADMIN_PANEL_HTML = """
                         </div>
                     </div>
 
-                    <!-- Session Status -->
                     <div class="${sessionActive ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'} border-b px-4 py-3">
                         <div class="max-w-7xl mx-auto flex items-center justify-between">
                             <div class="flex items-center space-x-2">
@@ -325,9 +394,7 @@ ADMIN_PANEL_HTML = """
                         </div>
                     </div>
 
-                    <!-- Main Content -->
                     <div class="max-w-7xl mx-auto px-4 py-6">
-                        <!-- Tabs -->
                         <div class="bg-white rounded-lg shadow mb-6">
                             <div class="border-b flex">
                                 <button onclick="showTab('channels')" id="tab-channels" class="px-6 py-4 border-b-2 border-indigo-600 text-indigo-600 font-medium">
@@ -339,7 +406,6 @@ ADMIN_PANEL_HTML = """
                             </div>
 
                             <div class="p-6">
-                                <!-- Channels Tab -->
                                 <div id="content-channels">
                                     <div class="bg-gray-50 p-6 rounded-lg mb-6">
                                         <h3 class="text-lg font-semibold text-gray-800 mb-4">Add New Channel</h3>
@@ -392,7 +458,6 @@ ADMIN_PANEL_HTML = """
                                     </div>
                                 </div>
 
-                                <!-- Config Tab -->
                                 <div id="content-config" style="display: none;">
                                     <div class="space-y-6">
                                         <div>
@@ -421,7 +486,6 @@ ADMIN_PANEL_HTML = """
                             </div>
                         </div>
 
-                        <!-- Instructions -->
                         <div class="bg-blue-50 border border-blue-200 rounded-lg p-6">
                             <h3 class="font-semibold text-blue-900 mb-3">How it works:</h3>
                             <ol class="list-decimal list-inside space-y-2 text-blue-800">
@@ -448,7 +512,6 @@ ADMIN_PANEL_HTML = """
             document.getElementById('content-' + tab).style.display = 'block';
         }
 
-        // Initialize
         loadData();
     </script>
 </body>
@@ -463,136 +526,196 @@ def index():
 @app.route('/api/data')
 def get_data():
     """Get all data"""
-    data = load_data()
-    return jsonify(data)
+    try:
+        data = load_data()
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Error in /api/data: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/setup', methods=['POST'])
 def setup():
     """Setup admin password"""
-    data = load_data()
-    if data['auth']:
-        return jsonify({'success': False, 'error': 'Already setup'})
-    
-    password = request.json.get('password')
-    data['auth'] = {'passwordHash': hash_password(password)}
-    save_data(data)
-    return jsonify({'success': True})
+    try:
+        data = load_data()
+        if data['auth']:
+            return jsonify({'success': False, 'error': 'Already setup'})
+        
+        password = request.json.get('password')
+        data['auth'] = {'passwordHash': hash_password(password)}
+        
+        if save_data(data):
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save data'})
+    except Exception as e:
+        logger.error(f"Error in /api/setup: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login():
     """Login to admin panel"""
-    data = load_data()
-    password = request.json.get('password')
-    
-    if not data['auth']:
-        return jsonify({'success': False, 'error': 'Not setup'})
-    
-    if hash_password(password) == data['auth']['passwordHash']:
-        session['authenticated'] = True
-        return jsonify({'success': True})
-    else:
-        return jsonify({'success': False, 'error': 'Incorrect password'})
+    try:
+        data = load_data()
+        password = request.json.get('password')
+        
+        if not data['auth']:
+            return jsonify({'success': False, 'error': 'Not setup'})
+        
+        if hash_password(password) == data['auth']['passwordHash']:
+            session['authenticated'] = True
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Incorrect password'})
+    except Exception as e:
+        logger.error(f"Error in /api/login: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/config', methods=['POST'])
 def save_config():
     """Save configuration"""
-    data = load_data()
-    config = request.json
-    data['config'] = config
-    save_data(data)
-    
-    # Reload bot config if running
-    global bot_instance
-    if bot_instance:
-        bot_instance.update_config(config)
-    
-    return jsonify({'success': True})
+    try:
+        data = load_data()
+        config = request.json
+        data['config'] = config
+        
+        if save_data(data):
+            # Reload bot config if running
+            global bot_instance
+            if bot_instance:
+                bot_instance.update_config(config)
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save data'})
+    except Exception as e:
+        logger.error(f"Error in /api/config: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/session/<action>', methods=['POST'])
 def toggle_session(action):
     """Activate/deactivate Telegram session"""
-    data = load_data()
-    
-    if action == 'activate':
-        if not data['config']['telegramSession']:
-            return jsonify({'success': False, 'error': 'Session string not configured'})
+    try:
+        data = load_data()
         
-        # Start bot
-        global bot_instance, bot_thread
-        if not bot_instance:
-            from bot import PWAutoUploader
-            bot_instance = PWAutoUploader(
-                data['config']['telegramSession'],
-                int(os.getenv('API_ID')),
-                os.getenv('API_HASH')
-            )
-            bot_instance.update_config(data['config'])
-            bot_instance.update_channels(data['channels'])
+        if action == 'activate':
+            if not data['config']['telegramSession']:
+                return jsonify({'success': False, 'error': 'Session string not configured'})
             
-            bot_thread = threading.Thread(target=bot_instance.run)
-            bot_thread.daemon = True
-            bot_thread.start()
+            # Import bot here to avoid issues
+            try:
+                from bot import PWAutoUploader
+            except Exception as e:
+                logger.error(f"Failed to import bot: {e}")
+                return jsonify({'success': False, 'error': f'Bot import failed: {str(e)}'})
+            
+            # Start bot
+            global bot_instance, bot_thread
+            try:
+                if not bot_instance:
+                    api_id = os.getenv('API_ID')
+                    api_hash = os.getenv('API_HASH')
+                    
+                    if not api_id or not api_hash:
+                        return jsonify({'success': False, 'error': 'API_ID or API_HASH not configured in environment'})
+                    
+                    bot_instance = PWAutoUploader(
+                        data['config']['telegramSession'],
+                        int(api_id),
+                        api_hash
+                    )
+                    bot_instance.update_config(data['config'])
+                    bot_instance.update_channels(data['channels'])
+                    
+                    bot_thread = threading.Thread(target=bot_instance.run)
+                    bot_thread.daemon = True
+                    bot_thread.start()
+                    
+                    logger.info("Bot started successfully")
+                
+                data['session_active'] = True
+                save_data(data)
+                return jsonify({'success': True, 'message': 'Session activated successfully'})
+                
+            except Exception as e:
+                logger.error(f"Failed to start bot: {e}")
+                return jsonify({'success': False, 'error': f'Failed to start bot: {str(e)}'})
         
-        data['session_active'] = True
-        save_data(data)
-        return jsonify({'success': True})
-    
-    elif action == 'deactivate':
-        data['session_active'] = False
-        save_data(data)
+        elif action == 'deactivate':
+            data['session_active'] = False
+            save_data(data)
+            
+            # Stop bot
+            if bot_instance:
+                try:
+                    bot_instance.stop()
+                except:
+                    pass
+            
+            return jsonify({'success': True, 'message': 'Session deactivated'})
         
-        # Stop bot
-        if bot_instance:
-            bot_instance.stop()
+        return jsonify({'success': False, 'error': 'Invalid action'})
         
-        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error in /api/session: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/channels', methods=['POST'])
 def add_channel():
     """Add new channel"""
-    data = load_data()
-    channel = request.json
-    data['channels'].append(channel)
-    save_data(data)
-    
-    # Update bot channels if running
-    global bot_instance
-    if bot_instance:
-        bot_instance.update_channels(data['channels'])
-    
-    return jsonify({'success': True, 'channels': data['channels']})
+    try:
+        data = load_data()
+        channel = request.json
+        data['channels'].append(channel)
+        
+        if save_data(data):
+            # Update bot channels if running
+            global bot_instance
+            if bot_instance:
+                bot_instance.update_channels(data['channels'])
+            return jsonify({'success': True, 'channels': data['channels']})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save data'})
+    except Exception as e:
+        logger.error(f"Error in /api/channels POST: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/channels/<channel_id>', methods=['DELETE'])
 def delete_channel(channel_id):
     """Delete channel"""
-    data = load_data()
-    data['channels'] = [ch for ch in data['channels'] if ch['id'] != channel_id]
-    save_data(data)
-    
-    # Update bot channels if running
-    global bot_instance
-    if bot_instance:
-        bot_instance.update_channels(data['channels'])
-    
-    return jsonify({'success': True, 'channels': data['channels']})
-
+    try:
+        data = load_data()
+        data['channels'] = [ch for ch in data['channels'] if ch['id'] != channel_id]
+    if save_data(data):
+        # Update bot channels if running
+        global bot_instance
+        if bot_instance:
+            bot_instance.update_channels(data['channels'])
+        return jsonify({'success': True, 'channels': data['channels']})
+    else:
+        return jsonify({'success': False, 'error': 'Failed to save data'})
+except Exception as e:
+    logger.error(f"Error in /api/channels DELETE: {e}")
+    return jsonify({'success': False, 'error': str(e)}), 500
 @app.route('/api/channels/<channel_id>/toggle', methods=['POST'])
 def toggle_channel(channel_id):
-    """Toggle channel status"""
-    data = load_data()
-    for ch in data['channels']:
-        if ch['id'] == channel_id:
-            ch['active'] = not ch['active']
-            break
-    save_data(data)
-    
-    # Update bot channels if running
-    global bot_instance
-    if bot_instance:
-        bot_instance.update_channels(data['channels'])
-    
-    return jsonify({'success': True, 'channels': data['channels']})
-
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+"""Toggle channel status"""
+try:
+data = load_data()
+for ch in data['channels']:
+if ch['id'] == channel_id:
+ch['active'] = not ch['active']
+break
+    if save_data(data):
+        # Update bot channels if running
+        global bot_instance
+        if bot_instance:
+            bot_instance.update_channels(data['channels'])
+        return jsonify({'success': True, 'channels': data['channels']})
+    else:
+        return jsonify({'success': False, 'error': 'Failed to save data'})
+except Exception as e:
+    logger.error(f"Error in /api/channels toggle: {e}")
+    return jsonify({'success': False, 'error': str(e)}), 500
+if name == 'main':
+port = int(os.getenv('PORT', 5000))
+app.run(host='0.0.0.0', port=port, debug=False)
