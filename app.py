@@ -69,7 +69,7 @@ def hash_password(password):
     """Simple password hashing"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-# HTML Template (same as before, no changes needed)
+# HTML Template
 ADMIN_PANEL_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -716,7 +716,6 @@ break
 except Exception as e:
     logger.error(f"Error in /api/channels toggle: {e}")
     return jsonify({'success': False, 'error': str(e)}), 500
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    # Use threaded=True for better handling
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+if name == 'main':
+port = int(os.getenv('PORT', 5000))
+app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
