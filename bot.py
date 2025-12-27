@@ -11,12 +11,11 @@ logger = logging.getLogger(__name__)
 
 class PWAutoUploader:
     def __init__(self, session_string, api_id, api_hash, session_dir=None):
-        # Always use StringSession to avoid database file issues
-        self.client = TelegramClient(
-            StringSession(session_string),
-            api_id,
-            api_hash
-        )
+        # Store credentials for later client creation
+        self.session_string = session_string
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.client = None
         self.pw_token = ""
         self.stystrk_token = ""
         self.channels = {}
@@ -45,6 +44,14 @@ class PWAutoUploader:
         
     async def start_client(self):
         """Start Telegram client"""
+        # Create client in the async context
+        if not self.client:
+            self.client = TelegramClient(
+                StringSession(self.session_string),
+                self.api_id,
+                self.api_hash
+            )
+        
         await self.client.start()
         logger.info("✅ Telegram client started successfully")
         
@@ -342,27 +349,45 @@ class PWAutoUploader:
         except Exception as e:
             logger.error(f"❌ Error uploading via bot: {e}")
             return None
-            
-    def run(self):
-        """Run the bot"""
-        self.running = True
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        
+    
+    async def _run_async(self):
+        """Async run method"""
         try:
-            self.loop.run_until_complete(self.start_client())
+            await self.start_client()
             logger.info("🤖 Bot is running and listening for /check commands...")
-            self.loop.run_until_complete(self.client.run_until_disconnected())
+            await self.client.run_until_disconnected()
         except Exception as e:
-            logger.error(f"❌ Error running bot: {e}")
+            logger.error(f"❌ Error in async run: {e}")
         finally:
             self.running = False
+            
+    def run(self):
+        """Run the bot - creates new event loop in thread"""
+        self.running = True
+        
+        # Create new event loop for this thread
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            
+            # Run the async method
+            self.loop.run_until_complete(self._run_async())
+            
+        except Exception as e:
+            logger.error(f"❌ Error running bot: {e}")
+            self.running = False
+        finally:
+            if self.loop:
+                self.loop.close()
             
     def stop(self):
         """Stop the bot"""
         self.running = False
-        if self.loop and self.loop.is_running():
-            self.loop.stop()
-        if self.client.is_connected():
-            self.loop.run_until_complete(self.client.disconnect())
-        logger.info("🛑 Bot stopped")
+        try:
+            if self.client and self.client.is_connected():
+                # Schedule disconnect in the bot's event loop
+                if self.loop and self.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
+            logger.info("🛑 Bot stopped")
+        except Exception as e:
+            logger.error(f"Error stopping bot: {e}")
