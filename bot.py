@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 import aiohttp
 import pytz
 
@@ -9,9 +10,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PWAutoUploader:
-    def __init__(self, session_string, api_id, api_hash):
+    def __init__(self, session_string, api_id, api_hash, session_dir=None):
+        # Always use StringSession to avoid database file issues
         self.client = TelegramClient(
-            session_string,
+            StringSession(session_string),
             api_id,
             api_hash
         )
@@ -27,7 +29,7 @@ class PWAutoUploader:
         """Update configuration"""
         self.pw_token = config.get('pwToken', '')
         self.stystrk_token = config.get('styStrkToken', '')
-        logger.info("Configuration updated")
+        logger.info("✅ Configuration updated")
         
     def update_channels(self, channels):
         """Update channel mappings"""
@@ -39,12 +41,12 @@ class PWAutoUploader:
             }
             for ch in channels if ch.get('active', False)
         }
-        logger.info(f"Loaded {len(self.channels)} active channels")
+        logger.info(f"✅ Loaded {len(self.channels)} active channels")
         
     async def start_client(self):
         """Start Telegram client"""
         await self.client.start()
-        logger.info("Telegram client started successfully")
+        logger.info("✅ Telegram client started successfully")
         
         @self.client.on(events.NewMessage(pattern='/check'))
         async def handle_check(event):
@@ -57,11 +59,11 @@ class PWAutoUploader:
             chat = await event.get_chat()
             channel_id = f"@{chat.username}" if chat.username else str(chat.id)
             
-            logger.info(f"Received /check from channel: {channel_id}")
+            logger.info(f"📩 Received /check from channel: {channel_id}")
             
             # Check if channel is monitored
             if channel_id not in self.channels:
-                logger.info(f"Channel not monitored: {channel_id}")
+                logger.info(f"⚠️ Channel not monitored: {channel_id}")
                 return
                 
             channel_info = self.channels[channel_id]
@@ -108,14 +110,14 @@ class PWAutoUploader:
                         await asyncio.sleep(300)  # 5 minutes
                         
                 except Exception as e:
-                    logger.error(f"Error processing lecture {idx}: {e}")
+                    logger.error(f"❌ Error processing lecture {idx}: {e}")
                     await event.respond(f"❌ Error processing lecture {idx}: {str(e)}")
                     continue
                     
             await event.respond("🎉 All lectures processed successfully!")
             
         except Exception as e:
-            logger.error(f"Error in /check command: {e}")
+            logger.error(f"❌ Error in /check command: {e}")
             await event.respond(f"❌ Error: {str(e)}")
             
     async def fetch_todays_schedule(self, batch_id):
@@ -136,7 +138,7 @@ class PWAutoUploader:
             "content-type": "application/json",
             "origin": "https://www.pw.live",
             "referer": "https://www.pw.live/",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
         try:
@@ -144,12 +146,13 @@ class PWAutoUploader:
                 async with session.get(url, params=params, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
+                        logger.info(f"✅ Fetched schedule: {len(data.get('data', []))} lectures")
                         return data.get('data', [])
                     else:
-                        logger.error(f"Failed to fetch schedule: {response.status}")
+                        logger.error(f"❌ Failed to fetch schedule: {response.status}")
                         return []
         except Exception as e:
-            logger.error(f"Error fetching schedule: {e}")
+            logger.error(f"❌ Error fetching schedule: {e}")
             return []
                     
     def filter_available_lectures(self, lectures):
@@ -180,56 +183,56 @@ class PWAutoUploader:
                     if now > end_time_ist:
                         available.append(lecture)
                 except Exception as e:
-                    logger.error(f"Error parsing time: {e}")
+                    logger.error(f"❌ Error parsing time: {e}")
                     
-        logger.info(f"Found {len(available)} available lectures")
+        logger.info(f"✅ Found {len(available)} available lectures")
         return available
         
     async def process_lecture(self, lecture, batch_id, channel_id, topic):
         """Process a single lecture"""
         try:
             lecture_id = lecture['_id']
-            logger.info(f"Processing lecture: {lecture_id}")
+            logger.info(f"🎬 Processing lecture: {lecture_id}")
             
             # Get video URL
             video_url = await self.get_video_url(batch_id, lecture_id)
             if not video_url:
-                logger.error("Failed to get video URL")
+                logger.error("❌ Failed to get video URL")
                 return False
                 
-            logger.info(f"Got video URL: {video_url[:100]}...")
+            logger.info(f"✅ Got video URL: {video_url[:100]}...")
             
             # Check if MPD URL needs conversion
             if 'master.mpd' in video_url:
-                logger.info("Converting MPD to M3U8...")
+                logger.info("🔄 Converting MPD to M3U8...")
                 m3u8_url = await self.generate_m3u8(video_url)
                 if not m3u8_url:
-                    logger.error("Failed to generate M3U8")
+                    logger.error("❌ Failed to generate M3U8")
                     return False
                 video_url = m3u8_url
-                logger.info(f"M3U8 URL: {video_url[:100]}...")
+                logger.info(f"✅ M3U8 URL: {video_url[:100]}...")
             
             # Upload via bot
-            logger.info("Sending to uploader bot...")
+            logger.info("📤 Sending to uploader bot...")
             video_message = await self.upload_via_bot(video_url)
             
             if not video_message:
-                logger.error("Failed to get video from uploader bot")
+                logger.error("❌ Failed to get video from uploader bot")
                 return False
                 
             # Forward to original channel
-            logger.info(f"Forwarding to channel: {channel_id}")
+            logger.info(f"📨 Forwarding to channel: {channel_id}")
             await self.client.send_file(
                 channel_id,
                 video_message.media,
                 caption=f"📚 {topic}"
             )
             
-            logger.info("Lecture processed successfully")
+            logger.info("✅ Lecture processed successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Error processing lecture: {e}")
+            logger.error(f"❌ Error processing lecture: {e}")
             return False
             
     async def get_video_url(self, batch_id, lecture_id):
@@ -261,10 +264,10 @@ class PWAutoUploader:
                             else:
                                 return f"{base_url}?{signed_params}"
                                 
-                    logger.error(f"Failed to get video URL: {response.status}")
+                    logger.error(f"❌ Failed to get video URL: {response.status}")
                     return None
         except Exception as e:
-            logger.error(f"Error getting video URL: {e}")
+            logger.error(f"❌ Error getting video URL: {e}")
             return None
                 
     async def generate_m3u8(self, mpd_url):
@@ -291,10 +294,10 @@ class PWAutoUploader:
                         m3u8_url = await response.text()
                         return m3u8_url.strip()
                     else:
-                        logger.error(f"Failed to generate M3U8: {response.status}")
+                        logger.error(f"❌ Failed to generate M3U8: {response.status}")
                         return None
         except Exception as e:
-            logger.error(f"Error generating M3U8: {e}")
+            logger.error(f"❌ Error generating M3U8: {e}")
             return None
             
     async def upload_via_bot(self, video_url):
@@ -302,27 +305,34 @@ class PWAutoUploader:
         try:
             # Send URL to uploader bot
             await self.client.send_message(self.uploader_bot, video_url)
-            logger.info(f"Sent URL to {self.uploader_bot}")
+            logger.info(f"✅ Sent URL to {self.uploader_bot}")
             
             # Wait for video response with timeout
             video_message = None
             timeout = 3600  # 1 hour
             start_time = datetime.now()
+            check_count = 0
             
             while not video_message:
+                check_count += 1
                 # Check for new messages from bot
-                async for message in self.client.iter_messages(self.uploader_bot, limit=1):
+                async for message in self.client.iter_messages(self.uploader_bot, limit=5):
                     if message.video or message.document:
-                        # Check if message is recent (within last 5 minutes of our request)
-                        if (datetime.now() - start_time).seconds < 300 or message.date > start_time:
+                        # Check if message is recent
+                        if message.date > start_time:
                             video_message = message
-                            logger.info("Received video from uploader bot")
+                            logger.info("✅ Received video from uploader bot")
                             break
                 
                 # Check timeout
-                if (datetime.now() - start_time).seconds > timeout:
-                    logger.error("Timeout waiting for video from uploader bot")
+                elapsed = (datetime.now() - start_time).seconds
+                if elapsed > timeout:
+                    logger.error("❌ Timeout waiting for video from uploader bot")
                     return None
+                
+                # Log progress every 10 checks (~ 1.6 minutes)
+                if check_count % 10 == 0:
+                    logger.info(f"⏳ Still waiting for video... ({elapsed // 60} minutes elapsed)")
                     
                 # Wait before checking again
                 await asyncio.sleep(10)
@@ -330,7 +340,7 @@ class PWAutoUploader:
             return video_message
             
         except Exception as e:
-            logger.error(f"Error uploading via bot: {e}")
+            logger.error(f"❌ Error uploading via bot: {e}")
             return None
             
     def run(self):
@@ -341,10 +351,10 @@ class PWAutoUploader:
         
         try:
             self.loop.run_until_complete(self.start_client())
-            logger.info("Bot is running...")
+            logger.info("🤖 Bot is running and listening for /check commands...")
             self.loop.run_until_complete(self.client.run_until_disconnected())
         except Exception as e:
-            logger.error(f"Error running bot: {e}")
+            logger.error(f"❌ Error running bot: {e}")
         finally:
             self.running = False
             
@@ -355,4 +365,4 @@ class PWAutoUploader:
             self.loop.stop()
         if self.client.is_connected():
             self.loop.run_until_complete(self.client.disconnect())
-        logger.info("Bot stopped")
+        logger.info("🛑 Bot stopped")
