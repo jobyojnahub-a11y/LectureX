@@ -130,7 +130,7 @@ class PWAutoUploader:
             
     async def fetch_todays_schedule(self, batch_id):
         """Fetch today's schedule from PW API"""
-        url = f"https://api.penpencil.co/v1/batches/{batch_id}/todays-schedule"
+        url = f"https://studymaxer.bhanuyadav.workers.dev/todays-schedule?batchId={batch_id}"
         params = {
             "batchId": batch_id,
             "isNewStudyMaterialFlow": "true"
