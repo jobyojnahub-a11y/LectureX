@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -135,6 +136,10 @@ class PWAutoUploader:
             "isNewStudyMaterialFlow": "true"
         }
         
+        # Generate random ID for this request
+        import uuid
+        random_id = str(uuid.uuid4())
+        
         headers = {
             "accept": "*/*",
             "accept-language": "en-US,en;q=0.9",
@@ -144,19 +149,30 @@ class PWAutoUploader:
             "client-version": "1.0.0",
             "content-type": "application/json",
             "origin": "https://www.pw.live",
+            "priority": "u=1, i",
+            "randomid": random_id,
             "referer": "https://www.pw.live/",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "sec-ch-ua": '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "cross-site",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
         }
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers) as response:
+                async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         data = await response.json()
                         logger.info(f"✅ Fetched schedule: {len(data.get('data', []))} lectures")
                         return data.get('data', [])
+                    elif response.status == 429:
+                        logger.error(f"❌ Rate limited! Wait before retrying. Response: {await response.text()}")
+                        return []
                     else:
-                        logger.error(f"❌ Failed to fetch schedule: {response.status}")
+                        logger.error(f"❌ Failed to fetch schedule: {response.status} - {await response.text()}")
                         return []
         except Exception as e:
             logger.error(f"❌ Error fetching schedule: {e}")
