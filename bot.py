@@ -20,7 +20,7 @@ class PWAutoUploader:
         self.pw_token = ""
         self.stystrk_token = ""
         self.channels = {}
-        self.uploader_bot = "@url_uploder_nrbot"
+        self.uploader_bot = "@Torrent_Leech_Pro_Bot"
         self.running = False
         self.ist = pytz.timezone('Asia/Kolkata')
         self.loop = None
@@ -225,16 +225,21 @@ class PWAutoUploader:
                 video_url = m3u8_url
                 logger.info(f"✅ M3U8 URL: {video_url[:100]}...")
             
-            # Upload via bot
+            # Clean topic for filename (remove special characters)
+            clean_topic = topic.replace('/', '-').replace('\\', '-').replace(':', '-').replace('|', '-')
+            
+            # Upload via bot with title
             logger.info("📤 Sending to uploader bot...")
-            video_message = await self.upload_via_bot(video_url)
+            video_message = await self.upload_via_bot(video_url, clean_topic)
             
             if not video_message:
                 logger.error("❌ Failed to get video from uploader bot")
                 return False
-                
-            # Forward to original channel
+            
+            # Forward to original channel WITHOUT sender name
             logger.info(f"📨 Forwarding to channel: {channel_id}")
+            
+            # Send as new message with caption (removes sender info)
             await self.client.send_file(
                 channel_id,
                 video_message.media,
@@ -345,119 +350,133 @@ class PWAutoUploader:
             logger.error(f"❌ Error generating M3U8: {e}")
             return None
             
-    async def upload_via_bot(self, video_url):
-        """Send URL to uploader bot and wait for video"""
+    async def upload_via_bot(self, video_url, lecture_title):
+        """Send URL to Torrent Leech Pro Bot and wait for video"""
         try:
-            # Send URL to uploader bot
-            await self.client.send_message(self.uploader_bot, video_url)
-            logger.info(f"✅ Sent URL to {self.uploader_bot}")
+            # Format command: /yl URL -n Title
+            command = f"/yl {video_url} -n {lecture_title}"
             
-            # Wait for buttons to appear
+            logger.info(f"📤 Sending to {self.uploader_bot}")
+            await self.client.send_message(self.uploader_bot, command)
+            
+            # Wait for quality selection buttons
             await asyncio.sleep(5)
-            logger.info("⏳ Waiting for quality selection buttons...")
+            logger.info("⏳ Waiting for quality selection...")
             
             # Get the latest message with buttons
             button_message = None
             async for message in self.client.iter_messages(self.uploader_bot, limit=5):
-                if message.buttons:
+                if message.buttons and "Choose Video Quality" in (message.text or ""):
                     button_message = message
-                    logger.info(f"✅ Found message with {len(message.buttons)} button rows")
+                    logger.info(f"✅ Found quality selection message")
                     break
             
             if not button_message or not button_message.buttons:
-                logger.error("❌ No buttons found from uploader bot")
+                logger.error("❌ No quality buttons found")
                 return None
             
-            # Click the quality button (3rd or 4th option)
-            # Buttons are in rows, we need to find the right one
-            quality_clicked = False
+            # Click "Best Video" button
+            best_video_clicked = False
             for row_idx, row in enumerate(button_message.buttons):
                 for btn_idx, button in enumerate(row):
-                    button_text = button.text.lower()
-                    # Look for mp4 quality buttons (447, 380, etc)
-                    if 'mp4' in button_text and ('447' in button_text or '380' in button_text or '640' in button_text or '854' in button_text):
-                        logger.info(f"🎬 Clicking quality button: {button.text}")
+                    button_text = button.text
+                    if 'Best Video' in button_text or 'best video' in button_text.lower():
+                        logger.info(f"🎬 Clicking: {button.text}")
                         await button_message.click(row_idx, btn_idx)
-                        quality_clicked = True
+                        best_video_clicked = True
                         break
-                if quality_clicked:
+                if best_video_clicked:
                     break
             
-            if not quality_clicked:
-                logger.error("❌ Could not find quality button")
+            if not best_video_clicked:
+                logger.error("❌ Could not find 'Best Video' button")
                 return None
             
-            # Wait for rename options
-            await asyncio.sleep(5)
-            logger.info("⏳ Waiting for rename options...")
+            logger.info("⏳ Download and upload started, tracking progress...")
             
-            # Get the rename options message
-            rename_message = None
-            async for message in self.client.iter_messages(self.uploader_bot, limit=5):
-                if message.buttons:
-                    rename_message = message
-                    break
-            
-            if not rename_message or not rename_message.buttons:
-                logger.error("❌ No rename options found")
-                return None
-            
-            # Click "Default" button (usually first option)
-            default_clicked = False
-            for row_idx, row in enumerate(rename_message.buttons):
-                for btn_idx, button in enumerate(row):
-                    button_text = button.text.lower()
-                    if 'default' in button_text:
-                        logger.info(f"✅ Clicking: {button.text}")
-                        await rename_message.click(row_idx, btn_idx)
-                        default_clicked = True
-                        break
-                if default_clicked:
-                    break
-            
-            if not default_clicked:
-                logger.warning("⚠️ Default button not found, clicking first button")
-                await rename_message.click(0, 0)
-            
-            logger.info("⏳ Waiting for video upload to complete...")
-            
-            # Wait for video response with timeout
+            # Track progress and wait for final video
             video_message = None
-            timeout = 3600  # 1 hour
+            progress_message = None
+            timeout = 7200  # 2 hours
             start_time = datetime.now()
-            check_count = 0
+            last_progress = ""
             
             while not video_message:
-                check_count += 1
-                # Check for new messages from bot
-                async for message in self.client.iter_messages(self.uploader_bot, limit=5):
-                    # Look for video or document
-                    if message.video or message.document:
-                        # Make sure it's after we sent the URL
+                # Check for new messages
+                async for message in self.client.iter_messages(self.uploader_bot, limit=10):
+                    msg_text = message.text or ""
+                    
+                    # Check if this is a progress message
+                    if "┃" in msg_text and ("Download" in msg_text or "Upload" in msg_text):
+                        # Extract progress info
+                        progress_info = self.extract_progress(msg_text)
+                        if progress_info and progress_info != last_progress:
+                            logger.info(f"📊 Progress: {progress_info}")
+                            last_progress = progress_info
+                            progress_message = message
+                    
+                    # Check if this is the final video
+                    if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
                         if message.date > start_time:
-                            # Check if it's actually a video file (not just buttons)
-                            if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
-                                video_message = message
-                                logger.info("✅ Received video from uploader bot")
-                                break
+                            video_message = message
+                            logger.info("✅ Received video from bot")
+                            break
+                
+                if video_message:
+                    break
                 
                 # Check timeout
                 elapsed = (datetime.now() - start_time).seconds
                 if elapsed > timeout:
-                    logger.error("❌ Timeout waiting for video from uploader bot")
+                    logger.error("❌ Timeout waiting for video")
                     return None
                 
-                # Log progress every 10 checks (~ 1.6 minutes)
-                if check_count % 10 == 0:
-                    logger.info(f"⏳ Still waiting for video... ({elapsed // 60} minutes elapsed)")
-                    
                 # Wait before checking again
-                await asyncio.sleep(10)
-                
+                await asyncio.sleep(15)
+            
             return video_message
             
         except Exception as e:
             logger.error(f"❌ Error uploading via bot: {e}")
+            return None
+    
+    def extract_progress(self, text):
+        """Extract progress information from bot message"""
+        try:
+            lines = text.split('\n')
+            progress_bar = ""
+            processed = ""
+            status = ""
+            
+            for line in lines:
+                if '┃' in line and '[' in line and ']' in line:
+                    # Extract progress bar
+                    start = line.find('[')
+                    end = line.find(']')
+                    if start != -1 and end != -1:
+                        progress_bar = line[start:end+1]
+                        # Also get percentage
+                        if '%' in line:
+                            pct_start = line.find(']') + 1
+                            pct_end = line.find('%', pct_start) + 1
+                            progress_bar += " " + line[pct_start:pct_end].strip()
+                
+                elif '┠ Processed:' in line:
+                    processed = line.replace('┠ Processed:', '').strip()
+                
+                elif '┠ Status:' in line:
+                    status = line.replace('┠ Status:', '').strip()
+            
+            if progress_bar:
+                result = progress_bar
+                if processed:
+                    result += f" | {processed}"
+                if status:
+                    result += f" | {status}"
+                return result
+            
+            return None
+        except:
             return None
     
     async def _run_async(self):
