@@ -427,7 +427,11 @@ class PWAutoUploader:
             video_message = None
             progress_message = None
             timeout = 7200  # 2 hours
-            start_time = datetime.now()
+            
+            # Make start_time timezone aware (UTC)
+            import pytz
+            start_time = datetime.now(pytz.UTC)
+            
             last_progress = ""
             check_interval = 15
             
