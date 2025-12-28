@@ -425,52 +425,68 @@ class PWAutoUploader:
             
             # Track progress and wait for final video
             video_message = None
-            progress_message = None
-            timeout = 7200  # 2 hours
+            timeout = 10800  # 3 hours for large files
             
             # Make start_time timezone aware (UTC)
             import pytz
             start_time = datetime.now(pytz.UTC)
             
             last_progress = ""
-            check_interval = 15
+            check_interval = 20
+            check_count = 0
+            last_check_time = start_time
             
             while not video_message:
+                check_count += 1
+                current_time = datetime.now(pytz.UTC)
+                
                 # Check for new messages
-                async for message in self.client.iter_messages(self.uploader_bot, limit=15):
+                found_progress = False
+                async for message in self.client.iter_messages(self.uploader_bot, limit=20):
                     msg_text = message.text or ""
                     
                     # Check if this is a progress message
-                    if "┃" in msg_text and ("Download" in msg_text or "Upload" in msg_text):
+                    if "┃" in msg_text and ("Download" in msg_text or "Upload" in msg_text or "Processed:" in msg_text):
                         # Extract progress info
                         progress_info = self.extract_progress(msg_text)
                         if progress_info and progress_info != last_progress:
-                            logger.info(f"📊 Progress: {progress_info}")
+                            logger.info(f"📊 {progress_info}")
                             last_progress = progress_info
-                            progress_message = message
+                            found_progress = True
+                            last_check_time = current_time  # Update last activity time
                     
                     # Check if this is the final video
                     if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
+                        # Check if it's after our command
                         if message.date > start_time:
                             # Make sure it's not a thumbnail or small file
                             file_size = message.document.size if message.document else (message.video.size if message.video else 0)
-                            if file_size > 1024 * 1024:  # At least 1MB
+                            if file_size > 5 * 1024 * 1024:  # At least 5MB
                                 video_message = message
-                                logger.info(f"✅ Received video from bot (Size: {file_size / (1024*1024):.2f}MB)")
+                                logger.info(f"✅ Received video! Size: {file_size / (1024*1024):.2f}MB")
                                 break
                 
                 if video_message:
                     break
                 
-                # Check timeout
-                elapsed = (datetime.now() - start_time).seconds
-                if elapsed > timeout:
-                    logger.error("❌ Timeout waiting for video")
+                # Check timeout from last activity
+                elapsed_total = (current_time - start_time).total_seconds()
+                elapsed_since_activity = (current_time - last_check_time).total_seconds()
+                
+                # If no activity for 30 minutes, timeout
+                if elapsed_since_activity > 1800:
+                    logger.error(f"❌ No activity for 30 minutes. Last progress: {last_progress}")
                     return None
                 
-                # Log every 2 minutes
-                if elapsed % 120 == 0 and elapsed > 0:
-                    logger.info(f"⏳ Still processing... ({elapsed // 60} minutes elapsed)")
+                # Total timeout
+                if elapsed_total > timeout:
+                    logger.error(f"❌ Total timeout ({timeout//60} minutes). Last progress: {last_progress}")
+                    return None
+                
+                # Log status every 5 checks (~ 1.5 minutes)
+                if check_count % 5 == 0:
+                    minutes_elapsed = int(elapsed_total // 60)
+                    logger.info(f"⏳ Processing... {minutes_elapsed} min elapsed. Last: {last_progress or 'Waiting...'}")
                 
                 # Wait before checking again
                 await asyncio.sleep(check_interval)
