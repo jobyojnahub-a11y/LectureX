@@ -129,35 +129,23 @@ class PWAutoUploader:
             await event.respond(f"❌ Error: {str(e)}")
             
     async def fetch_todays_schedule(self, batch_id):
-        """Fetch today's schedule from PW API"""
-        url = f"https://studymaxer.bhanuyadav.workers.dev/todays-schedule?batchId={batch_id}"
+        """Fetch today's schedule from StudyMaxer API"""
+        url = f"https://studymaxer.bhanuyadav.workers.dev/todays-schedule"
         params = {
-            "batchId": batch_id,
-            "isNewStudyMaterialFlow": "true"
+            "batchId": batch_id
         }
-        
-        # Generate random ID for this request
-        import uuid
-        random_id = str(uuid.uuid4())
         
         headers = {
             "accept": "*/*",
             "accept-language": "en-US,en;q=0.9",
-            "authorization": f"Bearer {self.pw_token}",
-            "client-id": "5eb393ee95fab7468a79d189",
-            "client-type": "WEB",
-            "client-version": "1.0.0",
-            "content-type": "application/json",
-            "origin": "https://www.pw.live",
-            "priority": "u=1, i",
-            "randomid": random_id,
-            "referer": "https://www.pw.live/",
+            "origin": "https://studymaxer.bhanuyadav.workers.dev",
+            "referer": "https://studymaxer.bhanuyadav.workers.dev/",
             "sec-ch-ua": '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
-            "sec-fetch-site": "cross-site",
+            "sec-fetch-site": "same-origin",
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
         }
         
@@ -166,13 +154,15 @@ class PWAutoUploader:
                 async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         data = await response.json()
-                        logger.info(f"✅ Fetched schedule: {len(data.get('data', []))} lectures")
-                        return data.get('data', [])
+                        lectures = data.get('data', [])
+                        logger.info(f"✅ Fetched schedule: {len(lectures)} lectures")
+                        return lectures
                     elif response.status == 429:
-                        logger.error(f"❌ Rate limited! Wait before retrying. Response: {await response.text()}")
+                        logger.error(f"❌ Rate limited! Wait before retrying.")
                         return []
                     else:
-                        logger.error(f"❌ Failed to fetch schedule: {response.status} - {await response.text()}")
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to fetch schedule: {response.status} - {error_text}")
                         return []
         except Exception as e:
             logger.error(f"❌ Error fetching schedule: {e}")
@@ -266,14 +256,35 @@ class PWAutoUploader:
             "childid": lecture_id
         }
         
+        headers = {
+            "accept": "*/*",
+            "accept-language": "en-US,en;q=0.9",
+            "origin": "https://video-url-details-v0.bhanuyadav.workers.dev",
+            "referer": "https://video-url-details-v0.bhanuyadav.workers.dev/",
+            "sec-ch-ua": '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
+        }
+        
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
+                async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
-                        data = await response.json()
+                        result = await response.json()
+                        
+                        # Check if response has success field
+                        if result.get('success'):
+                            data = result.get('data', {})
+                        else:
+                            data = result
                         
                         # Check for direct video_url
                         if 'video_url' in data:
+                            logger.info(f"✅ Got direct video_url")
                             return data['video_url']
                             
                         # Check for url + signedUrl combination
@@ -281,14 +292,25 @@ class PWAutoUploader:
                             base_url = data['url']
                             signed_params = data['signedUrl']
                             
+                            # Remove leading ? if present in signedUrl
+                            if signed_params.startswith('?'):
+                                signed_params = signed_params[1:]
+                            
                             # Combine URL and parameters
                             if '?' in base_url:
-                                return f"{base_url}&{signed_params}"
+                                final_url = f"{base_url}&{signed_params}"
                             else:
-                                return f"{base_url}?{signed_params}"
-                                
-                    logger.error(f"❌ Failed to get video URL: {response.status}")
-                    return None
+                                final_url = f"{base_url}?{signed_params}"
+                            
+                            logger.info(f"✅ Combined URL with signed parameters")
+                            return final_url
+                        
+                        logger.error(f"❌ Unexpected response format: {result}")
+                        return None
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Failed to get video URL: {response.status} - {error_text}")
+                        return None
         except Exception as e:
             logger.error(f"❌ Error getting video URL: {e}")
             return None
