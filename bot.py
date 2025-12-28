@@ -360,36 +360,65 @@ class PWAutoUploader:
             await self.client.send_message(self.uploader_bot, command)
             
             # Wait for quality selection buttons
-            await asyncio.sleep(5)
+            await asyncio.sleep(8)
             logger.info("⏳ Waiting for quality selection...")
             
             # Get the latest message with buttons
             button_message = None
-            async for message in self.client.iter_messages(self.uploader_bot, limit=5):
-                if message.buttons and "Choose Video Quality" in (message.text or ""):
+            async for message in self.client.iter_messages(self.uploader_bot, limit=10):
+                if message.reply_markup and "Choose Video Quality" in (message.text or ""):
                     button_message = message
                     logger.info(f"✅ Found quality selection message")
                     break
             
-            if not button_message or not button_message.buttons:
+            if not button_message:
                 logger.error("❌ No quality buttons found")
+                # Try to find any message with buttons
+                async for message in self.client.iter_messages(self.uploader_bot, limit=10):
+                    if message.reply_markup:
+                        button_message = message
+                        logger.info(f"✅ Found message with buttons: {message.text[:50] if message.text else 'No text'}")
+                        break
+            
+            if not button_message or not button_message.reply_markup:
+                logger.error("❌ Still no buttons found")
                 return None
             
-            # Click "Best Video" button
-            best_video_clicked = False
-            for row_idx, row in enumerate(button_message.buttons):
-                for btn_idx, button in enumerate(row):
-                    button_text = button.text
-                    if 'Best Video' in button_text or 'best video' in button_text.lower():
-                        logger.info(f"🎬 Clicking: {button.text}")
-                        await button_message.click(row_idx, btn_idx)
-                        best_video_clicked = True
+            # Get all buttons from reply_markup
+            try:
+                from telethon.tl.types import KeyboardButtonCallback
+                
+                buttons = button_message.reply_markup.rows
+                logger.info(f"📋 Found {len(buttons)} button rows")
+                
+                # Search for "Best Video" button
+                best_video_found = False
+                for row_idx, row in enumerate(buttons):
+                    for button in row.buttons:
+                        button_text = button.text if hasattr(button, 'text') else str(button)
+                        logger.info(f"🔘 Button found: {button_text}")
+                        
+                        if 'Best Video' in button_text or 'best video' in button_text.lower():
+                            logger.info(f"✅ Found 'Best Video' button, clicking...")
+                            
+                            # Click using callback_query
+                            await button_message.click(data=button.data)
+                            best_video_found = True
+                            break
+                    
+                    if best_video_found:
                         break
-                if best_video_clicked:
-                    break
-            
-            if not best_video_clicked:
-                logger.error("❌ Could not find 'Best Video' button")
+                
+                if not best_video_found:
+                    logger.error("❌ Could not find 'Best Video' button")
+                    logger.info("📋 Available buttons:")
+                    for row in buttons:
+                        for button in row.buttons:
+                            logger.info(f"   - {button.text if hasattr(button, 'text') else str(button)}")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"❌ Error clicking button: {e}")
                 return None
             
             logger.info("⏳ Download and upload started, tracking progress...")
@@ -400,10 +429,11 @@ class PWAutoUploader:
             timeout = 7200  # 2 hours
             start_time = datetime.now()
             last_progress = ""
+            check_interval = 15
             
             while not video_message:
                 # Check for new messages
-                async for message in self.client.iter_messages(self.uploader_bot, limit=10):
+                async for message in self.client.iter_messages(self.uploader_bot, limit=15):
                     msg_text = message.text or ""
                     
                     # Check if this is a progress message
@@ -418,9 +448,12 @@ class PWAutoUploader:
                     # Check if this is the final video
                     if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
                         if message.date > start_time:
-                            video_message = message
-                            logger.info("✅ Received video from bot")
-                            break
+                            # Make sure it's not a thumbnail or small file
+                            file_size = message.document.size if message.document else (message.video.size if message.video else 0)
+                            if file_size > 1024 * 1024:  # At least 1MB
+                                video_message = message
+                                logger.info(f"✅ Received video from bot (Size: {file_size / (1024*1024):.2f}MB)")
+                                break
                 
                 if video_message:
                     break
@@ -431,13 +464,19 @@ class PWAutoUploader:
                     logger.error("❌ Timeout waiting for video")
                     return None
                 
+                # Log every 2 minutes
+                if elapsed % 120 == 0 and elapsed > 0:
+                    logger.info(f"⏳ Still processing... ({elapsed // 60} minutes elapsed)")
+                
                 # Wait before checking again
-                await asyncio.sleep(15)
+                await asyncio.sleep(check_interval)
             
             return video_message
             
         except Exception as e:
             logger.error(f"❌ Error uploading via bot: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
     
     def extract_progress(self, text):
