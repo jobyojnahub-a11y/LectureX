@@ -352,6 +352,75 @@ class PWAutoUploader:
             await self.client.send_message(self.uploader_bot, video_url)
             logger.info(f"✅ Sent URL to {self.uploader_bot}")
             
+            # Wait for buttons to appear
+            await asyncio.sleep(5)
+            logger.info("⏳ Waiting for quality selection buttons...")
+            
+            # Get the latest message with buttons
+            button_message = None
+            async for message in self.client.iter_messages(self.uploader_bot, limit=5):
+                if message.buttons:
+                    button_message = message
+                    logger.info(f"✅ Found message with {len(message.buttons)} button rows")
+                    break
+            
+            if not button_message or not button_message.buttons:
+                logger.error("❌ No buttons found from uploader bot")
+                return None
+            
+            # Click the quality button (3rd or 4th option)
+            # Buttons are in rows, we need to find the right one
+            quality_clicked = False
+            for row_idx, row in enumerate(button_message.buttons):
+                for btn_idx, button in enumerate(row):
+                    button_text = button.text.lower()
+                    # Look for mp4 quality buttons (447, 380, etc)
+                    if 'mp4' in button_text and ('447' in button_text or '380' in button_text or '640' in button_text or '854' in button_text):
+                        logger.info(f"🎬 Clicking quality button: {button.text}")
+                        await button_message.click(row_idx, btn_idx)
+                        quality_clicked = True
+                        break
+                if quality_clicked:
+                    break
+            
+            if not quality_clicked:
+                logger.error("❌ Could not find quality button")
+                return None
+            
+            # Wait for rename options
+            await asyncio.sleep(5)
+            logger.info("⏳ Waiting for rename options...")
+            
+            # Get the rename options message
+            rename_message = None
+            async for message in self.client.iter_messages(self.uploader_bot, limit=5):
+                if message.buttons:
+                    rename_message = message
+                    break
+            
+            if not rename_message or not rename_message.buttons:
+                logger.error("❌ No rename options found")
+                return None
+            
+            # Click "Default" button (usually first option)
+            default_clicked = False
+            for row_idx, row in enumerate(rename_message.buttons):
+                for btn_idx, button in enumerate(row):
+                    button_text = button.text.lower()
+                    if 'default' in button_text:
+                        logger.info(f"✅ Clicking: {button.text}")
+                        await rename_message.click(row_idx, btn_idx)
+                        default_clicked = True
+                        break
+                if default_clicked:
+                    break
+            
+            if not default_clicked:
+                logger.warning("⚠️ Default button not found, clicking first button")
+                await rename_message.click(0, 0)
+            
+            logger.info("⏳ Waiting for video upload to complete...")
+            
             # Wait for video response with timeout
             video_message = None
             timeout = 3600  # 1 hour
@@ -362,12 +431,15 @@ class PWAutoUploader:
                 check_count += 1
                 # Check for new messages from bot
                 async for message in self.client.iter_messages(self.uploader_bot, limit=5):
+                    # Look for video or document
                     if message.video or message.document:
-                        # Check if message is recent
+                        # Make sure it's after we sent the URL
                         if message.date > start_time:
-                            video_message = message
-                            logger.info("✅ Received video from uploader bot")
-                            break
+                            # Check if it's actually a video file (not just buttons)
+                            if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
+                                video_message = message
+                                logger.info("✅ Received video from uploader bot")
+                                break
                 
                 # Check timeout
                 elapsed = (datetime.now() - start_time).seconds
