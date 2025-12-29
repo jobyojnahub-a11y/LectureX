@@ -81,118 +81,52 @@ class PWAutoUploader:
                 
             batch_id = channel_info['batchId']
             
-            # Send initial message and store it
-            status_msg = await event.respond("🔍 **Checking Today's Schedule...**")
-            temp_messages = [status_msg]
+            await event.respond("🔍 Checking today's schedule...")
             
             # Fetch schedule
             lectures = await self.fetch_todays_schedule(batch_id)
             
             if not lectures:
-                await status_msg.edit("❌ **No lectures found for today**")
-                await asyncio.sleep(3)
-                await status_msg.delete()
+                await event.respond("❌ No lectures found for today")
                 return
                 
             # Filter available lectures
             available = self.filter_available_lectures(lectures)
             
             if not available:
-                await status_msg.edit("📝 **No recorded or completed lectures available yet**")
-                await asyncio.sleep(3)
-                await status_msg.delete()
+                await event.respond("📝 No recorded or completed lectures available yet")
                 return
-            
-            # Update status
-            await status_msg.edit(f"✅ **Found {len(available)} Lecture(s)**\n\n⏳ Starting processing...")
+                
+            await event.respond(f"✅ Found {len(available)} lecture(s) to process")
             
             # Process each lecture
             for idx, lecture in enumerate(available, 1):
                 try:
-                    # Get lecture details
-                    topic = lecture.get('topic', 'Untitled Lecture')
-                    subject = lecture.get('subjectId', {}).get('name', 'General')
+                    topic = lecture['topic']
+                    await event.respond(f"🎬 Processing {idx}/{len(available)}:\n{topic}")
                     
-                    # Update status for this lecture
-                    processing_msg = await event.respond(
-                        f"🎬 **Processing Lecture {idx}/{len(available)}**\n\n"
-                        f"📚 **Subject:** `{subject}`\n"
-                        f"📖 **Topic:** `{topic}`\n\n"
-                        f"⏳ Please wait..."
-                    )
-                    temp_messages.append(processing_msg)
-                    
-                    success = await self.process_lecture(lecture, batch_id, channel_id, topic, subject)
+                    success = await self.process_lecture(lecture, batch_id, channel_id, topic)
                     
                     if success:
-                        await processing_msg.edit(
-                            f"✅ **Lecture {idx} Uploaded Successfully!**\n\n"
-                            f"📚 **Subject:** `{subject}`\n"
-                            f"📖 **Topic:** `{topic}`"
-                        )
-                        # Delete after 5 seconds
-                        await asyncio.sleep(5)
-                        await processing_msg.delete()
-                        temp_messages.remove(processing_msg)
+                        await event.respond(f"✅ Lecture {idx} uploaded successfully!")
                     else:
-                        await processing_msg.edit(
-                            f"❌ **Failed to process Lecture {idx}**\n\n"
-                            f"📚 **Subject:** `{subject}`\n"
-                            f"📖 **Topic:** `{topic}`"
-                        )
-                        # Delete after 5 seconds
-                        await asyncio.sleep(5)
-                        await processing_msg.delete()
-                        temp_messages.remove(processing_msg)
+                        await event.respond(f"❌ Failed to process lecture {idx}")
                     
                     # Cooldown between lectures
                     if idx < len(available):
-                        cooldown_msg = await event.respond(
-                            f"⏸️ **Cooldown Period**\n\n"
-                            f"⏳ Waiting 5 minutes before next lecture...\n"
-                            f"📊 Progress: **{idx}/{len(available)}** completed"
-                        )
-                        temp_messages.append(cooldown_msg)
+                        await event.respond("⏳ Waiting 5 minutes before next lecture...")
                         await asyncio.sleep(300)  # 5 minutes
-                        await cooldown_msg.delete()
-                        temp_messages.remove(cooldown_msg)
                         
                 except Exception as e:
                     logger.error(f"❌ Error processing lecture {idx}: {e}")
-                    error_msg = await event.respond(
-                        f"❌ **Error Processing Lecture {idx}**\n\n"
-                        f"⚠️ `{str(e)}`"
-                    )
-                    temp_messages.append(error_msg)
-                    await asyncio.sleep(5)
-                    await error_msg.delete()
-                    temp_messages.remove(error_msg)
+                    await event.respond(f"❌ Error processing lecture {idx}: {str(e)}")
                     continue
-            
-            # Final success message
-            final_msg = await event.respond(
-                f"🎉 **All Lectures Processed!**\n\n"
-                f"✅ Successfully uploaded **{len(available)}** lecture(s)\n"
-                f"📚 Check above for the videos"
-            )
-            
-            # Delete all temporary messages
-            for msg in temp_messages:
-                try:
-                    await msg.delete()
-                except:
-                    pass
-            
-            # Delete final message after 10 seconds
-            await asyncio.sleep(10)
-            try:
-                await final_msg.delete()
-            except:
-                pass
+                    
+            await event.respond("🎉 All lectures processed successfully!")
             
         except Exception as e:
             logger.error(f"❌ Error in /check command: {e}")
-            await event.respond(f"❌ **Error:** `{str(e)}`")
+            await event.respond(f"❌ Error: {str(e)}")
             
     async def fetch_todays_schedule(self, batch_id):
         """Fetch today's schedule from StudyMaxer API"""
@@ -267,7 +201,7 @@ class PWAutoUploader:
         logger.info(f"✅ Found {len(available)} available lectures")
         return available
         
-    async def process_lecture(self, lecture, batch_id, channel_id, topic, subject):
+    async def process_lecture(self, lecture, batch_id, channel_id, topic):
         """Process a single lecture"""
         try:
             lecture_id = lecture['_id']
@@ -302,15 +236,6 @@ class PWAutoUploader:
                 logger.error("❌ Failed to get video from uploader bot")
                 return False
             
-            # Create beautiful caption
-            caption = (
-                f"📚 **{subject}**\n\n"
-                f"📖 **{topic}**\n\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"✅ Quality: Best Available\n"
-                f"📥 Ready to Watch"
-            )
-            
             # Forward to original channel WITHOUT sender name
             logger.info(f"📨 Forwarding to channel: {channel_id}")
             
@@ -318,7 +243,7 @@ class PWAutoUploader:
             await self.client.send_file(
                 channel_id,
                 video_message.media,
-                caption=caption
+                caption=f"📚 {topic}"
             )
             
             logger.info("✅ Lecture processed successfully")
