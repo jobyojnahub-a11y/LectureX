@@ -62,6 +62,8 @@ class PWAutoUploader:
             
     async def process_check_command(self, event):
         """Process /check command"""
+        temp_messages = []  # Track temporary messages
+        
         try:
             # Get channel ID
             chat = await event.get_chat()
@@ -76,57 +78,132 @@ class PWAutoUploader:
                 
             channel_info = self.channels[channel_id]
             if not channel_info['active']:
-                await event.respond("⚠️ This channel is currently inactive")
+                temp_msg = await event.respond("⚠️ **This channel is currently inactive**")
+                await asyncio.sleep(5)
+                await temp_msg.delete()
                 return
                 
             batch_id = channel_info['batchId']
             
-            await event.respond("🔍 Checking today's schedule...")
+            # Send initial status
+            status_msg = await event.respond("🔍 **Checking Today's Schedule...**")
+            temp_messages.append(status_msg)
             
             # Fetch schedule
             lectures = await self.fetch_todays_schedule(batch_id)
             
             if not lectures:
-                await event.respond("❌ No lectures found for today")
+                await status_msg.edit("❌ **No lectures found for today**")
+                await asyncio.sleep(5)
+                await status_msg.delete()
                 return
                 
             # Filter available lectures
             available = self.filter_available_lectures(lectures)
             
             if not available:
-                await event.respond("📝 No recorded or completed lectures available yet")
+                await status_msg.edit("📝 **No recorded or completed lectures available yet**")
+                await asyncio.sleep(5)
+                await status_msg.delete()
                 return
-                
-            await event.respond(f"✅ Found {len(available)} lecture(s) to process")
+            
+            # Update status
+            await status_msg.edit(
+                f"✅ **Found {len(available)} Lecture(s)**\n\n"
+                f"⏳ Starting processing..."
+            )
             
             # Process each lecture
             for idx, lecture in enumerate(available, 1):
                 try:
-                    topic = lecture['topic']
-                    await event.respond(f"🎬 Processing {idx}/{len(available)}:\n{topic}")
+                    # Get lecture details
+                    topic = lecture.get('topic', 'Untitled Lecture')
+                    subject = lecture.get('subjectId', {}).get('name', 'General')
                     
-                    success = await self.process_lecture(lecture, batch_id, channel_id, topic)
+                    # Create processing message
+                    processing_msg = await event.respond(
+                        f"🎬 **Processing Lecture {idx}/{len(available)}**\n\n"
+                        f"📚 **Subject:** `{subject}`\n"
+                        f"📖 **Topic:** `{topic}`\n\n"
+                        f"⏳ Please wait..."
+                    )
+                    temp_messages.append(processing_msg)
+                    
+                    # Process the lecture
+                    success = await self.process_lecture(lecture, batch_id, channel_id, topic, subject)
                     
                     if success:
-                        await event.respond(f"✅ Lecture {idx} uploaded successfully!")
+                        await processing_msg.edit(
+                            f"✅ **Lecture {idx} Completed!**\n\n"
+                            f"📚 **Subject:** `{subject}`\n"
+                            f"📖 **Topic:** `{topic}`"
+                        )
+                        await asyncio.sleep(3)
+                        await processing_msg.delete()
+                        temp_messages.remove(processing_msg)
                     else:
-                        await event.respond(f"❌ Failed to process lecture {idx}")
+                        await processing_msg.edit(
+                            f"❌ **Failed to Process**\n\n"
+                            f"📚 **Subject:** `{subject}`\n"
+                            f"📖 **Topic:** `{topic}`"
+                        )
+                        await asyncio.sleep(5)
+                        await processing_msg.delete()
+                        temp_messages.remove(processing_msg)
                     
                     # Cooldown between lectures
                     if idx < len(available):
-                        await event.respond("⏳ Waiting 5 minutes before next lecture...")
+                        cooldown_msg = await event.respond(
+                            f"⏸️ **Cooldown Period**\n\n"
+                            f"⏳ Waiting 5 minutes...\n"
+                            f"📊 Progress: **{idx}/{len(available)}** completed"
+                        )
+                        temp_messages.append(cooldown_msg)
                         await asyncio.sleep(300)  # 5 minutes
+                        await cooldown_msg.delete()
+                        temp_messages.remove(cooldown_msg)
                         
                 except Exception as e:
                     logger.error(f"❌ Error processing lecture {idx}: {e}")
-                    await event.respond(f"❌ Error processing lecture {idx}: {str(e)}")
+                    error_msg = await event.respond(
+                        f"❌ **Error Processing Lecture {idx}**\n\n"
+                        f"⚠️ `{str(e)}`"
+                    )
+                    temp_messages.append(error_msg)
+                    await asyncio.sleep(5)
+                    await error_msg.delete()
+                    temp_messages.remove(error_msg)
                     continue
-                    
-            await event.respond("🎉 All lectures processed successfully!")
+            
+            # Final completion message
+            final_msg = await event.respond(
+                f"🎉 **All Lectures Processed!**\n\n"
+                f"✅ Successfully uploaded **{len(available)}** lecture(s)\n"
+                f"📚 Check above for videos"
+            )
+            
+            # Clean up all temporary messages
+            for msg in temp_messages:
+                try:
+                    await msg.delete()
+                except:
+                    pass
+            
+            # Delete final message after 10 seconds
+            await asyncio.sleep(10)
+            try:
+                await final_msg.delete()
+            except:
+                pass
             
         except Exception as e:
             logger.error(f"❌ Error in /check command: {e}")
-            await event.respond(f"❌ Error: {str(e)}")
+            error_msg = await event.respond(f"❌ **Error:** `{str(e)}`")
+            await asyncio.sleep(5)
+            try:
+                await error_msg.delete()
+            except:
+                pass
             
     async def fetch_todays_schedule(self, batch_id):
         """Fetch today's schedule from StudyMaxer API"""
@@ -201,7 +278,7 @@ class PWAutoUploader:
         logger.info(f"✅ Found {len(available)} available lectures")
         return available
         
-    async def process_lecture(self, lecture, batch_id, channel_id, topic):
+    async def process_lecture(self, lecture, batch_id, channel_id, topic, subject):
         """Process a single lecture"""
         try:
             lecture_id = lecture['_id']
@@ -225,7 +302,7 @@ class PWAutoUploader:
                 video_url = m3u8_url
                 logger.info(f"✅ M3U8 URL: {video_url[:100]}...")
             
-            # Clean topic for filename (remove special characters)
+            # Clean topic for filename
             clean_topic = topic.replace('/', '-').replace('\\', '-').replace(':', '-').replace('|', '-')
             
             # Upload via bot with title
@@ -236,14 +313,22 @@ class PWAutoUploader:
                 logger.error("❌ Failed to get video from uploader bot")
                 return False
             
-            # Forward to original channel WITHOUT sender name
+            # Create beautiful caption
+            caption = (
+                f"📚 **{subject}**\n\n"
+                f"📖 **{topic}**\n\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Quality: **Best Available**\n"
+                f"📥 Ready to Watch"
+            )
+            
+            # Forward to channel WITHOUT sender info
             logger.info(f"📨 Forwarding to channel: {channel_id}")
             
-            # Send as new message with caption (removes sender info)
             await self.client.send_file(
                 channel_id,
                 video_message.media,
-                caption=f"📚 {topic}"
+                caption=caption
             )
             
             logger.info("✅ Lecture processed successfully")
@@ -281,27 +366,22 @@ class PWAutoUploader:
                     if response.status == 200:
                         result = await response.json()
                         
-                        # Check if response has success field
                         if result.get('success'):
                             data = result.get('data', {})
                         else:
                             data = result
                         
-                        # Check for direct video_url
                         if 'video_url' in data:
                             logger.info(f"✅ Got direct video_url")
                             return data['video_url']
                             
-                        # Check for url + signedUrl combination
                         if 'url' in data and 'signedUrl' in data:
                             base_url = data['url']
                             signed_params = data['signedUrl']
                             
-                            # Remove leading ? if present in signedUrl
                             if signed_params.startswith('?'):
                                 signed_params = signed_params[1:]
                             
-                            # Combine URL and parameters
                             if '?' in base_url:
                                 final_url = f"{base_url}&{signed_params}"
                             else:
@@ -310,11 +390,10 @@ class PWAutoUploader:
                             logger.info(f"✅ Combined URL with signed parameters")
                             return final_url
                         
-                        logger.error(f"❌ Unexpected response format: {result}")
+                        logger.error(f"❌ Unexpected response format")
                         return None
                     else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Failed to get video URL: {response.status} - {error_text}")
+                        logger.error(f"❌ Failed to get video URL: {response.status}")
                         return None
         except Exception as e:
             logger.error(f"❌ Error getting video URL: {e}")
@@ -333,9 +412,7 @@ class PWAutoUploader:
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
-        payload = {
-            "url": mpd_url
-        }
+        payload = {"url": mpd_url}
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -353,17 +430,14 @@ class PWAutoUploader:
     async def upload_via_bot(self, video_url, lecture_title):
         """Send URL to Torrent Leech Pro Bot and wait for video"""
         try:
-            # Format command: /yl URL -n Title
             command = f"/yl {video_url} -n {lecture_title}"
             
             logger.info(f"📤 Sending to {self.uploader_bot}")
             await self.client.send_message(self.uploader_bot, command)
             
-            # Wait for quality selection buttons
             await asyncio.sleep(8)
             logger.info("⏳ Waiting for quality selection...")
             
-            # Get the latest message with buttons
             button_message = None
             async for message in self.client.iter_messages(self.uploader_bot, limit=10):
                 if message.reply_markup and "Choose Video Quality" in (message.text or ""):
@@ -372,36 +446,27 @@ class PWAutoUploader:
                     break
             
             if not button_message:
-                logger.error("❌ No quality buttons found")
-                # Try to find any message with buttons
                 async for message in self.client.iter_messages(self.uploader_bot, limit=10):
                     if message.reply_markup:
                         button_message = message
-                        logger.info(f"✅ Found message with buttons: {message.text[:50] if message.text else 'No text'}")
+                        logger.info(f"✅ Found message with buttons")
                         break
             
             if not button_message or not button_message.reply_markup:
-                logger.error("❌ Still no buttons found")
+                logger.error("❌ No buttons found")
                 return None
             
-            # Get all buttons from reply_markup
             try:
-                from telethon.tl.types import KeyboardButtonCallback
-                
                 buttons = button_message.reply_markup.rows
                 logger.info(f"📋 Found {len(buttons)} button rows")
                 
-                # Search for "Best Video" button
                 best_video_found = False
                 for row_idx, row in enumerate(buttons):
                     for button in row.buttons:
                         button_text = button.text if hasattr(button, 'text') else str(button)
-                        logger.info(f"🔘 Button found: {button_text}")
                         
                         if 'Best Video' in button_text or 'best video' in button_text.lower():
-                            logger.info(f"✅ Found 'Best Video' button, clicking...")
-                            
-                            # Click using callback_query
+                            logger.info(f"✅ Clicking 'Best Video' button")
                             await button_message.click(data=button.data)
                             best_video_found = True
                             break
@@ -410,24 +475,18 @@ class PWAutoUploader:
                         break
                 
                 if not best_video_found:
-                    logger.error("❌ Could not find 'Best Video' button")
-                    logger.info("📋 Available buttons:")
-                    for row in buttons:
-                        for button in row.buttons:
-                            logger.info(f"   - {button.text if hasattr(button, 'text') else str(button)}")
+                    logger.error("❌ 'Best Video' button not found")
                     return None
                     
             except Exception as e:
                 logger.error(f"❌ Error clicking button: {e}")
                 return None
             
-            logger.info("⏳ Download and upload started, tracking progress...")
+            logger.info("⏳ Tracking download/upload progress...")
             
-            # Track progress and wait for final video
             video_message = None
-            timeout = 10800  # 3 hours for large files
+            timeout = 10800  # 3 hours
             
-            # Make start_time timezone aware (UTC)
             import pytz
             start_time = datetime.now(pytz.UTC)
             
@@ -440,28 +499,20 @@ class PWAutoUploader:
                 check_count += 1
                 current_time = datetime.now(pytz.UTC)
                 
-                # Check for new messages
-                found_progress = False
                 async for message in self.client.iter_messages(self.uploader_bot, limit=20):
                     msg_text = message.text or ""
                     
-                    # Check if this is a progress message
                     if "┃" in msg_text and ("Download" in msg_text or "Upload" in msg_text or "Processed:" in msg_text):
-                        # Extract progress info
                         progress_info = self.extract_progress(msg_text)
                         if progress_info and progress_info != last_progress:
                             logger.info(f"📊 {progress_info}")
                             last_progress = progress_info
-                            found_progress = True
-                            last_check_time = current_time  # Update last activity time
+                            last_check_time = current_time
                     
-                    # Check if this is the final video
                     if message.video or (message.document and message.document.mime_type and 'video' in message.document.mime_type):
-                        # Check if it's after our command
                         if message.date > start_time:
-                            # Make sure it's not a thumbnail or small file
                             file_size = message.document.size if message.document else (message.video.size if message.video else 0)
-                            if file_size > 5 * 1024 * 1024:  # At least 5MB
+                            if file_size > 5 * 1024 * 1024:
                                 video_message = message
                                 logger.info(f"✅ Received video! Size: {file_size / (1024*1024):.2f}MB")
                                 break
@@ -469,34 +520,27 @@ class PWAutoUploader:
                 if video_message:
                     break
                 
-                # Check timeout from last activity
                 elapsed_total = (current_time - start_time).total_seconds()
                 elapsed_since_activity = (current_time - last_check_time).total_seconds()
                 
-                # If no activity for 30 minutes, timeout
                 if elapsed_since_activity > 1800:
-                    logger.error(f"❌ No activity for 30 minutes. Last progress: {last_progress}")
+                    logger.error(f"❌ No activity for 30 minutes")
                     return None
                 
-                # Total timeout
                 if elapsed_total > timeout:
-                    logger.error(f"❌ Total timeout ({timeout//60} minutes). Last progress: {last_progress}")
+                    logger.error(f"❌ Total timeout ({timeout//60} minutes)")
                     return None
                 
-                # Log status every 5 checks (~ 1.5 minutes)
                 if check_count % 5 == 0:
                     minutes_elapsed = int(elapsed_total // 60)
-                    logger.info(f"⏳ Processing... {minutes_elapsed} min elapsed. Last: {last_progress or 'Waiting...'}")
+                    logger.info(f"⏳ Processing... {minutes_elapsed} min. Last: {last_progress or 'Waiting...'}")
                 
-                # Wait before checking again
                 await asyncio.sleep(check_interval)
             
             return video_message
             
         except Exception as e:
             logger.error(f"❌ Error uploading via bot: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return None
     
     def extract_progress(self, text):
@@ -509,12 +553,10 @@ class PWAutoUploader:
             
             for line in lines:
                 if '┃' in line and '[' in line and ']' in line:
-                    # Extract progress bar
                     start = line.find('[')
                     end = line.find(']')
                     if start != -1 and end != -1:
                         progress_bar = line[start:end+1]
-                        # Also get percentage
                         if '%' in line:
                             pct_start = line.find(']') + 1
                             pct_end = line.find('%', pct_start) + 1
@@ -553,12 +595,10 @@ class PWAutoUploader:
         """Run the bot - creates new event loop in thread"""
         self.running = True
         
-        # Create new event loop for this thread
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             
-            # Run the async method
             self.loop.run_until_complete(self._run_async())
             
         except Exception as e:
@@ -573,7 +613,6 @@ class PWAutoUploader:
         self.running = False
         try:
             if self.client and self.client.is_connected():
-                # Schedule disconnect in the bot's event loop
                 if self.loop and self.loop.is_running():
                     asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
             logger.info("🛑 Bot stopped")
